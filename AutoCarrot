@@ -211,8 +211,7 @@ env.WisHUBCarrotDisableRollbackNextRun = true
 			end
 
 			local text = getPromptText(prompt)
-			return text:find("kick", 1, true) ~= nil
-				or text:find("disconnect", 1, true) ~= nil
+			return text:find("disconnect", 1, true) ~= nil
 				or text:find("lost connection", 1, true) ~= nil
 				or text:find("error code", 1, true) ~= nil
 				or text:find("reconnect", 1, true) ~= nil
