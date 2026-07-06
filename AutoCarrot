@@ -1,53 +1,275 @@
-getgenv().WisHUBCarrotConfig = getgenv().WisHUBCarrotConfig or {
-	AutoPlant = true,
-	PlantSeed = "Carrot",
+do
+	local reconnectEnv = (type(getgenv) == "function" and getgenv()) or _G
+	local reconnectConfig = reconnectEnv.WisHUBCarrotConfig
+		or rawget(_G, "WisHUBCarrotConfig")
+		or {}
 
-	AutoHarvest = true,
-	HarvestBelowKg = 50,
+	local function reconnectCfgValue(key, default)
+		local value = reconnectConfig and reconnectConfig[key]
+		if value == nil then
+			return default
+		end
+		return value
+	end
 
-	AutoSell = true,
-	AutoSprinkler = true,
-	HidePlantsExceptCarrot = true,
-	Rollback = getgenv().WisHUBCarrotDisableRollbackNextRun ~= true,
-	AutoRejoin = true,
-	RejoinSeed = "Auto",
-	RejoinCheckInterval = 3,
-	RejoinDelay = 8,
-	RelogIfLoadingStuck = true,
-	LoadingStuckDelay = 35,
-	LoadingStuckRelogDelay = 2,
-	Speed = 0.1,
-	Webhook = "",
+	local function reconnectCfgBool(key, default)
+		local value = reconnectCfgValue(key, default)
+		if type(value) == "string" then
+			value = value:lower()
+			if value == "true" or value == "yes" or value == "on" or value == "1" then
+				return true
+			end
+			if value == "false" or value == "no" or value == "off" or value == "0" then
+				return false
+			end
+		end
+		return value == true
+	end
 
-	Sprinklers = {
-		["Super Sprinkler"] = true,
-		["Common Sprinkler"] = true,
-		["Uncommon Sprinkler"] = true,
-		["Rare Sprinkler"] = true,
-		["Legendary Sprinkler"] = true,
-	},
-}
+	local function reconnectCfgNumber(key, default, minValue, maxValue)
+		local value = tonumber(reconnectCfgValue(key, default)) or default
+		if minValue and value < minValue then
+			value = minValue
+		end
+		if maxValue and value > maxValue then
+			value = maxValue
+		end
+		return value
+	end
 
-getgenv().WisHUBCarrotDisableRollbackNextRun = false
+	local function getQueueOnTeleport()
+		return queue_on_teleport
+			or (syn and syn.queue_on_teleport)
+			or (fluxus and fluxus.queue_on_teleport)
+			or (KRNL_LOADED and queue_on_teleport)
+	end
 
-if not game:IsLoaded() then
-	game.Loaded:Wait()
+	local function queueReconnectScript()
+		local queue = getQueueOnTeleport()
+		if type(queue) ~= "function" then
+			return
+		end
+
+		local payload = reconnectCfgValue("ReconnectScript")
+			or reconnectCfgValue("AutoReconnectScript")
+			or reconnectCfgValue("QueueOnTeleportScript")
+			or reconnectEnv.WisHUBCarrotReconnectScript
+			or reconnectEnv.WisHUBCarrotQueueOnTeleportScript
+
+		if type(payload) == "string" and payload ~= "" then
+			pcall(function()
+				queue(payload)
+			end)
+			return
+		end
+
+		pcall(function()
+			queue([[
+local env = (type(getgenv) == "function" and getgenv()) or _G
+env.WisHUBCarrotConfig = env.WisHUBCarrotConfig or {}
+env.WisHUBCarrotConfig.AutoReconnect = true
+env.WisHUBCarrotDisableRollbackNextRun = true
+]])
+		end)
+	end
+
+	local autoReconnectEnabled = reconnectCfgBool("AutoReconnect", true)
+	if autoReconnectEnabled and not reconnectEnv.WisHUBCarrotReconnectHooked then
+		reconnectEnv.WisHUBCarrotReconnectHooked = true
+
+		local reconnecting = false
+		local reconnectPlayers = game:GetService("Players")
+		local reconnectTeleportService = game:GetService("TeleportService")
+		local reconnectPlayer = reconnectPlayers.LocalPlayer
+
+		local function getReconnectPlayer()
+			reconnectPlayer = reconnectPlayer or reconnectPlayers.LocalPlayer
+			return reconnectPlayer
+		end
+
+		local function shouldSkipReconnect()
+			local skipUntil = tonumber(reconnectEnv.WisHUBCarrotSkipReconnectUntil) or 0
+			if reconnectEnv.WisHUBCarrotSkipNextReconnect or (skipUntil > 0 and os.clock() < skipUntil) then
+				reconnectEnv.WisHUBCarrotSkipNextReconnect = nil
+				reconnectEnv.WisHUBCarrotLastReconnectSkipped = os.clock()
+				return true
+			end
+			return false
+		end
+
+		reconnectEnv.WisHUBCarrotMarkIntentionalKick = function(seconds)
+			seconds = tonumber(seconds) or reconnectCfgNumber("IntentionalKickSkipSeconds", 120, 1)
+			reconnectEnv.WisHUBCarrotSkipNextReconnect = true
+			reconnectEnv.WisHUBCarrotSkipReconnectUntil = os.clock() + math.max(seconds, 1)
+		end
+
+		local function requestReconnect(reason)
+			if shouldSkipReconnect() then
+				return
+			end
+			if reconnecting then
+				return
+			end
+			reconnecting = true
+
+			task.spawn(function()
+				reconnectEnv.WisHUBCarrotLastReconnectReason = tostring(reason or "unknown")
+				reconnectEnv.WisHUBCarrotReconnectAttempts = (tonumber(reconnectEnv.WisHUBCarrotReconnectAttempts) or 0) + 1
+				reconnectEnv.WisHUBCarrotDisableRollbackNextRun = true
+				queueReconnectScript()
+
+				local maxAttempts = math.max(1, math.floor(reconnectCfgNumber("ReconnectMaxAttempts", 8, 1)))
+				local baseDelay = reconnectCfgNumber("ReconnectDelay", 1.5, 0)
+				local retryDelay = reconnectCfgNumber("ReconnectRetryDelay", 3, 0)
+
+				for attempt = 1, maxAttempts do
+					if attempt == 1 and baseDelay > 0 then
+						task.wait(baseDelay)
+					elseif attempt > 1 and retryDelay > 0 then
+						task.wait(retryDelay)
+					end
+
+					local targetPlayer = getReconnectPlayer()
+					if targetPlayer then
+						local ok = false
+						if reconnectCfgBool("ReconnectSameServer", false) and game.JobId and game.JobId ~= "" then
+							ok = pcall(function()
+								reconnectTeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, targetPlayer)
+							end)
+						end
+						if not ok then
+							ok = pcall(function()
+								reconnectTeleportService:Teleport(game.PlaceId, targetPlayer)
+							end)
+						end
+						if ok then
+							task.wait(6)
+						end
+					end
+				end
+
+				reconnecting = false
+			end)
+		end
+
+		reconnectEnv.WisHUBCarrotRequestReconnect = requestReconnect
+
+		pcall(function()
+			reconnectTeleportService.TeleportInitFailed:Connect(function()
+				reconnecting = false
+				task.delay(reconnectCfgNumber("TeleportFailedRetryDelay", 3, 0), function()
+					requestReconnect("teleport-init-failed")
+				end)
+			end)
+		end)
+
+		local function getPromptText(prompt)
+			local parts = {}
+			local ok, descendants = pcall(function()
+				return prompt:GetDescendants()
+			end)
+			if not ok or not descendants then
+				return ""
+			end
+
+			for _, obj in ipairs(descendants) do
+				if obj:IsA("TextLabel") or obj:IsA("TextButton") then
+					table.insert(parts, tostring(obj.Text or ""):lower())
+				end
+			end
+
+			return table.concat(parts, " ")
+		end
+
+		local function promptHasIgnoredKickText(prompt)
+			local ignored = reconnectCfgValue("ReconnectIgnoreKickText", { "kg", "matching", "matched" })
+			if type(ignored) ~= "table" then
+				return false
+			end
+
+			local text = getPromptText(prompt)
+			for _, keyword in pairs(ignored) do
+				keyword = tostring(keyword or ""):lower()
+				if keyword ~= "" and text:find(keyword, 1, true) then
+					reconnectEnv.WisHUBCarrotLastReconnectIgnoredText = keyword
+					return true
+				end
+			end
+
+			return false
+		end
+
+		local function promptLooksLikeKick(prompt)
+			if not prompt then
+				return false
+			end
+			if shouldSkipReconnect() or promptHasIgnoredKickText(prompt) then
+				return false
+			end
+			if prompt.Name == "ErrorPrompt" then
+				return true
+			end
+
+			local text = getPromptText(prompt)
+			return text:find("kick", 1, true) ~= nil
+				or text:find("disconnect", 1, true) ~= nil
+				or text:find("lost connection", 1, true) ~= nil
+				or text:find("error code", 1, true) ~= nil
+				or text:find("reconnect", 1, true) ~= nil
+		end
+
+		local function watchKickPrompt()
+			local ok, coreGui = pcall(function()
+				return game:GetService("CoreGui")
+			end)
+			if not ok or not coreGui then
+				return
+			end
+
+			local robloxPromptGui = coreGui:FindFirstChild("RobloxPromptGui") or coreGui:WaitForChild("RobloxPromptGui", 30)
+			local promptOverlay = robloxPromptGui and (robloxPromptGui:FindFirstChild("promptOverlay") or robloxPromptGui:WaitForChild("promptOverlay", 30))
+			if not promptOverlay then
+				return
+			end
+
+			local function checkPrompt(prompt)
+				task.defer(function()
+					local promptReadDelay = reconnectCfgNumber("ReconnectPromptReadDelay", 0.25, 0)
+					if promptReadDelay > 0 then
+						task.wait(promptReadDelay)
+					end
+					if promptLooksLikeKick(prompt) then
+						task.wait(reconnectCfgNumber("ReconnectKickDelay", 1.5, 0))
+						requestReconnect("kick-prompt")
+					end
+				end)
+			end
+
+			promptOverlay.ChildAdded:Connect(checkPrompt)
+			for _, prompt in ipairs(promptOverlay:GetChildren()) do
+				checkPrompt(prompt)
+			end
+		end
+
+		task.spawn(watchKickPrompt)
+
+		if reconnectCfgBool("ReconnectIfNotLoaded", true) then
+			task.delay(reconnectCfgNumber("ReconnectLoadTimeout", 90, 15), function()
+				if not game:IsLoaded() then
+					requestReconnect("load-timeout")
+				end
+			end)
+		end
+	end
 end
 
 local Players = game:GetService("Players")
-local player = Players.LocalPlayer
-while not player do
-	task.wait()
-	player = Players.LocalPlayer
-end
-
-if not player.Character then
-	player.CharacterAdded:Wait()
-end
-
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TeleportService = game:GetService("TeleportService")
-local remote = ReplicatedStorage:WaitForChild("SharedModules", 9e9):WaitForChild("Packet", 9e9):WaitForChild("RemoteEvent", 9e9)
+local Lighting = game:GetService("Lighting")
+
+local player = Players.LocalPlayer
+local remote = ReplicatedStorage.SharedModules.Packet.RemoteEvent
 
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local menu = game:GetService("Workspace"):FindFirstChild("LoadingScreenMenu")
@@ -161,6 +383,7 @@ local state = {
 	autoHarvestCarrot = cfgBool("AutoHarvest", false),
 	autoPlantCarrot = cfgBool("AutoPlant", false),
 	autoSellAll = cfgBool("AutoSell", false),
+	boostFps = cfgBool("BoostFPS", cfgBool("FPSBoost", false)),
 	hideNonCarrotVisuals = cfgBool("HidePlantsExceptCarrot", cfgBool("HideNonCarrotVisuals", false)),
 	harvestKg = cfgNumber("HarvestBelowKg", 0, 0),
 	farmSpeed = cfgNumber("Speed", 0.2, 0.1, 1),
@@ -182,6 +405,169 @@ local function safeSpawn(label, fn)
 		local ok, err = xpcall(fn, tracebackMessage)
 		if not ok then
 			warn("[WisHUB Carrot " .. tostring(label) .. "] " .. tostring(err))
+		end
+	end)
+end
+
+local fpsBoostConnections = {}
+
+local function setProp(obj, prop, value)
+	pcall(function()
+		obj[prop] = value
+	end)
+end
+
+local function applyRenderQualityBoost()
+	pcall(function()
+		settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+	end)
+	pcall(function()
+		UserSettings().GameSettings.SavedQualityLevel = Enum.SavedQualitySetting.QualityLevel1
+	end)
+
+	setProp(Lighting, "GlobalShadows", false)
+	setProp(Lighting, "Brightness", 0)
+	setProp(Lighting, "EnvironmentDiffuseScale", 0)
+	setProp(Lighting, "EnvironmentSpecularScale", 0)
+	pcall(function()
+		Lighting.Technology = Enum.Technology.Compatibility
+	end)
+	pcall(function()
+		if workspace.CurrentCamera then
+			workspace.CurrentCamera.FieldOfView = cfgNumber("BoostFPSFieldOfView", 30, 20, 70)
+		end
+	end)
+
+	local terrain = workspace:FindFirstChildOfClass("Terrain")
+	if terrain then
+		setProp(terrain, "Decoration", false)
+		setProp(terrain, "WaterWaveSize", 0)
+		setProp(terrain, "WaterWaveSpeed", 0)
+		setProp(terrain, "WaterReflectance", 0)
+		setProp(terrain, "WaterTransparency", 1)
+	end
+end
+
+local function isLocalCharacterObject(obj)
+	local char = player.Character
+	return char and obj:IsDescendantOf(char)
+end
+
+local function applyBoostToObject(obj)
+	if not obj or not obj.Parent or obj:IsA("ProximityPrompt") then
+		return
+	end
+
+	if obj:IsA("BasePart") then
+		if not isLocalCharacterObject(obj) then
+			setProp(obj, "CastShadow", false)
+			setProp(obj, "Reflectance", 0)
+			setProp(obj, "Material", Enum.Material.SmoothPlastic)
+			setProp(obj, "MaterialVariant", "")
+			if cfgBool("BoostFPSGrayWorld", true) then
+				setProp(obj, "Color", Color3.fromRGB(95, 95, 95))
+			end
+			if obj:IsA("MeshPart") then
+				setProp(obj, "TextureID", "")
+				setProp(obj, "RenderFidelity", Enum.RenderFidelity.Performance)
+			end
+		end
+	elseif obj:IsA("Decal") or obj:IsA("Texture") then
+		setProp(obj, "Transparency", 1)
+	elseif obj:IsA("SpecialMesh") then
+		setProp(obj, "TextureId", "")
+	elseif obj:IsA("ParticleEmitter")
+		or obj:IsA("Trail")
+		or obj:IsA("Beam")
+		or obj:IsA("Fire")
+		or obj:IsA("Smoke")
+		or obj:IsA("Sparkles") then
+		setProp(obj, "Enabled", false)
+	elseif obj:IsA("PointLight")
+		or obj:IsA("SurfaceLight")
+		or obj:IsA("SpotLight")
+		or obj:IsA("Highlight")
+		or obj:IsA("BloomEffect")
+		or obj:IsA("BlurEffect")
+		or obj:IsA("DepthOfFieldEffect")
+		or obj:IsA("SunRaysEffect")
+		or obj:IsA("ColorCorrectionEffect")
+		or obj:IsA("Sky")
+		or obj:IsA("Atmosphere")
+		or obj:IsA("Clouds") then
+		if obj:IsA("Atmosphere") then
+			setProp(obj, "Density", 0)
+			setProp(obj, "Haze", 0)
+			setProp(obj, "Glare", 0)
+			setProp(obj, "Offset", 0)
+		elseif obj:IsA("Clouds") then
+			setProp(obj, "Enabled", false)
+			setProp(obj, "Density", 0)
+		elseif not obj:IsA("Sky") then
+			setProp(obj, "Enabled", false)
+		end
+	elseif cfgBool("BoostFPSHideWorldUi", true) and (obj:IsA("BillboardGui") or obj:IsA("SurfaceGui")) then
+		setProp(obj, "Enabled", false)
+	elseif obj:IsA("SurfaceAppearance") then
+		setProp(obj, "ColorMap", "")
+		setProp(obj, "MetalnessMap", "")
+		setProp(obj, "NormalMap", "")
+		setProp(obj, "RoughnessMap", "")
+	end
+end
+
+local function sweepFpsBoost(root)
+	if not root then
+		return
+	end
+
+	applyBoostToObject(root)
+	local checked = 0
+	for _, obj in ipairs(root:GetDescendants()) do
+		if not isCurrentRun() or not state.boostFps then
+			return
+		end
+		applyBoostToObject(obj)
+		checked += 1
+		if checked % 350 == 0 then
+			task.wait()
+		end
+	end
+end
+
+local function startFpsBoost()
+	if not state.boostFps then
+		return
+	end
+
+	for _, connection in ipairs(fpsBoostConnections) do
+		pcall(function()
+			connection:Disconnect()
+		end)
+	end
+	fpsBoostConnections = {}
+
+	applyRenderQualityBoost()
+	safeSpawn("fps-boost-sweep", function()
+		sweepFpsBoost(workspace)
+		sweepFpsBoost(Lighting)
+	end)
+
+	table.insert(fpsBoostConnections, workspace.DescendantAdded:Connect(function(obj)
+		if state.boostFps then
+			task.defer(applyBoostToObject, obj)
+		end
+	end))
+	table.insert(fpsBoostConnections, Lighting.DescendantAdded:Connect(function(obj)
+		if state.boostFps then
+			task.defer(applyBoostToObject, obj)
+		end
+	end))
+
+	safeSpawn("fps-boost-refresh", function()
+		while isCurrentRun() and state.boostFps do
+			applyRenderQualityBoost()
+			task.wait(cfgNumber("BoostFPSRefreshInterval", 8, 2))
 		end
 	end)
 end
@@ -375,6 +761,46 @@ local function readNumber(obj, attrs, includeAncestor)
 	end
 end
 
+local function parseKgText(text)
+	text = tostring(text or "")
+	local number = text:match("([%d]+%.?%d*)%s*[kK][gG]") or text:match("([%d]+%,?%d*)%s*[kK][gG]")
+	if number then
+		return tonumber((number:gsub(",", ".")))
+	end
+end
+
+local function readDisplayedKg(obj)
+	if not obj then
+		return nil
+	end
+
+	local value = parseKgText(obj.Name)
+	if value then
+		return value
+	end
+
+	if obj:IsA("TextLabel") or obj:IsA("TextButton") or obj:IsA("TextBox") then
+		value = parseKgText(obj.Text)
+		if value then
+			return value
+		end
+	end
+
+	local checked = 0
+	for _, child in ipairs(obj:GetDescendants()) do
+		if child:IsA("TextLabel") or child:IsA("TextButton") or child:IsA("TextBox") then
+			value = parseKgText(child.Text)
+			if value then
+				return value
+			end
+		end
+		checked += 1
+		if checked >= 100 then
+			break
+		end
+	end
+end
+
 local carrotBaseWeight
 local function getCarrotBaseWeight()
 	if carrotBaseWeight ~= nil then
@@ -428,6 +854,11 @@ local CARROT_WEIGHT_MULTIPLIER = 0.534
 local function getObjectKg(obj)
 	if not obj then
 		return 0
+	end
+
+	local displayed = readDisplayedKg(obj)
+	if displayed then
+		return displayed
 	end
 
 	-- Try direct weight attributes first
@@ -685,16 +1116,16 @@ local PLANT_ANCHOR_RANDOM_FACTOR = 0.44
 local PLANT_SPRINKLER_ATTEMPTS = 24
 local PLANT_POSITION_CACHE_SECONDS = 2
 local PLANT_NEAREST_SAMPLE_LIMIT = 70
-local PLANT_SPRINKLER_MIN_RADIUS_FACTOR = 0.02
+local PLANT_SPRINKLER_MIN_RADIUS_FACTOR = 0.035
 local PLANT_SPRINKLER_MAX_RADIUS_FACTOR = 0.52
-local PLANT_NEAR_SPRINKLER_MIN_DISTANCE = 0.5
-local PLANT_NEAR_SPRINKLER_MAX_DISTANCE = 4.0
-local PLANT_SPRINKLER_MAX_DISTANCE_CAP = 15
-local PLANT_SPRINKLER_EDGE_MARGIN = 2
-local PLANT_DEFAULT_SPACING = 3.5
+local PLANT_NEAR_SPRINKLER_MIN_DISTANCE = 1.25
+local PLANT_NEAR_SPRINKLER_MAX_DISTANCE = 5.5
+local PLANT_SPRINKLER_MAX_DISTANCE_CAP = 26
+local PLANT_SPRINKLER_EDGE_MARGIN = 12
+local PLANT_DEFAULT_SPACING = 5.5
 local PLANT_SEED_SPACING = {
-	Carrot = 3.5,
-	Mega = 3.5,
+	Carrot = 5.5,
+	Mega = 5.5,
 }
 
 local sprinklerRuntime = {
@@ -1745,7 +2176,7 @@ local function disableRollbackOnce(force)
 	if not force and not rollbackActive then
 		return false
 	end
-	local packetRemote = remote or ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("Packet"):WaitForChild("RemoteEvent")
+	local packetRemote = ReplicatedStorage.SharedModules.Packet.RemoteEvent
 	if not packetRemote then
 		return false
 	end
@@ -1794,53 +2225,66 @@ end
 
 local function carrotMatchesWantedKg(obj, targetKg)
 	if not obj or not isCarrotObject(obj) then
-		return false, 0
+		return false
 	end
 	local kg = getObjectKg(obj)
 	if targetKg <= 0 then
 		return true, kg
 	end
-	return (kg > 0 and kg >= targetKg), kg
+	return kg > 0 and kg >= targetKg, kg
+end
+
+local function formatCarrotKickKg(kg)
+	kg = tonumber(kg) or 0
+	local text = string.format("%.2f", kg):gsub("0+$", ""):gsub("%.$", "")
+	return text ~= "" and text or "0"
+end
+
+local function kickForWantedCarrot(kg)
+	state.autoHarvestCarrot = false
+	state.autoPlantCarrot = false
+	state.autoSellAll = false
+	if type(Config) == "table" then
+		Config.AutoRejoin = false
+	end
+
+	task.wait(10)
+	if type(isCurrentRun) == "function" and not isCurrentRun() then
+		return
+	end
+	if player and player.Parent then
+		pcall(function()
+			player:Kick("WisHUB : Congrast you got " .. formatCarrotKickKg(kg) .. " kg carrot in your garden")
+		end)
+	end
 end
 
 local function gardenHasWantedCarrot()
 	local plot = getMyPlot()
 	local plants = plot and plot:FindFirstChild("Plants")
 	if not plants then
-		return false, 0
+		return false
 	end
 
 	local targetKg = tonumber(state.harvestKg) or 0
-	local checked = 0
 	for _, plant in ipairs(plants:GetChildren()) do
-		local match, kg = carrotMatchesWantedKg(plant, targetKg)
-		if match then
+		local matches, kg = carrotMatchesWantedKg(plant, targetKg)
+		if matches then
 			return true, kg
 		end
 
 		local fruits = plant:FindFirstChild("Fruits")
 		if fruits then
 			for _, fruit in ipairs(fruits:GetChildren()) do
-				local fmatch, fkg = carrotMatchesWantedKg(fruit, targetKg)
-				if fmatch then
-					return true, fkg
+				local fruitMatches, fruitKg = carrotMatchesWantedKg(fruit, targetKg)
+				if fruitMatches then
+					return true, fruitKg
 				end
-			end
-		end
-
-		for _, obj in ipairs(plant:GetDescendants()) do
-			local omatch, okg = carrotMatchesWantedKg(obj, targetKg)
-			if omatch then
-				return true, okg
-			end
-			checked += 1
-			if checked % 150 == 0 then
-				task.wait()
 			end
 		end
 	end
 
-	return false, 0
+	return false
 end
 
 local function rejoinGame()
@@ -1897,6 +2341,44 @@ local function hasLoadingStuckSignal()
 	return false
 end
 
+local inventoryRejoinHoldLastLog = 0
+local function isInventoryReadyForAutoRejoin()
+	if not cfgBool("WaitForInventoryBeforeRejoin", true) then
+		return true
+	end
+	if not player:FindFirstChild("Backpack") then
+		return false
+	end
+	if hasLoadingStuckSignal() then
+		return false
+	end
+	return true
+end
+
+local function logInventoryRejoinHold()
+	local now = os.clock()
+	if now - inventoryRejoinHoldLastLog < 10 then
+		return
+	end
+	inventoryRejoinHoldLastLog = now
+	print("[WisHUB Carrot] tahan auto rejoin: controller/inventory belum ready")
+end
+
+local function seedInventoryStillEmptyAfterConfirm(seedName)
+	local confirmDelay = cfgNumber("InventoryEmptyConfirmDelay", 12, 0)
+	if confirmDelay > 0 then
+		task.wait(confirmDelay)
+		if not isCurrentRun() or not cfgBool("AutoRejoin", false) then
+			return false
+		end
+		if not isInventoryReadyForAutoRejoin() then
+			logInventoryRejoinHold()
+			return false
+		end
+	end
+	return isSeedInventoryEmpty(seedName)
+end
+
 local loadingStuckRelogStarted = false
 local function startLoadingStuckRelogWatchdog()
 	if not cfgBool("RelogIfLoadingStuck", false) then
@@ -1904,7 +2386,7 @@ local function startLoadingStuckRelogWatchdog()
 	end
 
 	safeSpawn("loading-stuck-relog", function()
-		task.wait(cfgNumber("LoadingStuckDelay", 35, 5))
+		task.wait(cfgNumber("LoadingStuckDelay", 90, 5))
 		if not isCurrentRun() or loadingStuckRelogStarted then
 			return
 		end
@@ -1926,30 +2408,6 @@ local function startLoadingStuckRelogWatchdog()
 	end)
 end
 
-local function sendDiscordWebhook(foundKg)
-	local url = cfgString("Webhook", "")
-	if url == "" then
-		return
-	end
-	local data = {
-		["content"] = string.format("🎉 **Harvester Alert!** 🎉\nBerhasil menemukan target Carrot seberat **%.2f Kg**! Rollback telah dimatikan dan player di-kick.", foundKg or 0),
-		["username"] = "Carrot Notifier"
-	}
-	local req = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
-	if req then
-		pcall(function()
-			req({
-				Url = url,
-				Method = "POST",
-				Headers = {
-					["Content-Type"] = "application/json"
-				},
-				Body = game:GetService("HttpService"):JSONEncode(data)
-			})
-		end)
-	end
-end
-
 local function startRollbackRejoinMonitor()
 	if not cfgBool("AutoRejoin", false) then
 		return
@@ -1958,18 +2416,23 @@ local function startRollbackRejoinMonitor()
 	safeSpawn("rejoin", function()
 		task.wait(cfgNumber("RejoinDelay", 8, 0))
 		while isCurrentRun() and cfgBool("AutoRejoin", false) do
-			local hasWanted, foundKg = gardenHasWantedCarrot()
-			if hasWanted then
-				disableRollbackOnce()
-				sendDiscordWebhook(foundKg)
-				task.wait(1)
-				player:Kick(string.format("Berhasil menemukan target Carrot seberat %.2f Kg! Rollback dimatikan.", foundKg or 0))
-				return
-			end
-
 			local seedName = getRejoinSeedName()
-			local noSprinklers = #getPlacedSprinklers() == 0
-			if isSeedInventoryEmpty(seedName) or noSprinklers then
+			if not isInventoryReadyForAutoRejoin() then
+				logInventoryRejoinHold()
+				task.wait(cfgNumber("RejoinCheckInterval", 3, 1))
+				continue
+			end
+			if isSeedInventoryEmpty(seedName) then
+				if not seedInventoryStillEmptyAfterConfirm(seedName) then
+					task.wait(cfgNumber("RejoinCheckInterval", 3, 1))
+					continue
+				end
+				local hasWantedCarrot, matchedKg = gardenHasWantedCarrot()
+				if hasWantedCarrot then
+					disableRollbackOnce()
+					kickForWantedCarrot(matchedKg)
+					return
+				end
 				rejoinGame()
 				return
 			end
@@ -1982,6 +2445,7 @@ local function applyNoUiConfig()
 	state.autoPlantCarrot = cfgBool("AutoPlant", state.autoPlantCarrot)
 	state.autoHarvestCarrot = cfgBool("AutoHarvest", state.autoHarvestCarrot)
 	state.autoSellAll = cfgBool("AutoSell", state.autoSellAll)
+	state.boostFps = cfgBool("BoostFPS", cfgBool("FPSBoost", state.boostFps))
 	state.hideNonCarrotVisuals = cfgBool("HidePlantsExceptCarrot", state.hideNonCarrotVisuals)
 	state.harvestKg = cfgNumber("HarvestBelowKg", state.harvestKg, 0)
 	state.farmSpeed = cfgNumber("Speed", state.farmSpeed, 0.1, 1)
@@ -1989,26 +2453,11 @@ local function applyNoUiConfig()
 	state.selectedSprinklers = cfgSelectedSprinklers()
 end
 
-local function setupAutoReconnect()
-	local GuiService = game:GetService("GuiService")
-	local TeleportService = game:GetService("TeleportService")
-	
-	GuiService.ErrorMessageChanged:Connect(function(errorMessage)
-		-- Jangan rejoin jika di-kick karena berhasil menemukan target
-		if type(errorMessage) == "string" and errorMessage:lower():find("berhasil menemukan target") then
-			return
-		end
-		
-		task.wait(3) -- Wait a bit to ensure session lock clears before re-rejoining
-		pcall(function()
-			TeleportService:Teleport(game.PlaceId, player)
-		end)
-	end)
-end
-
 local function boot()
-	setupAutoReconnect()
 	applyNoUiConfig()
+	if state.boostFps then
+		startFpsBoost()
+	end
 	startLoadingStuckRelogWatchdog()
 
 	if state.hideNonCarrotVisuals then
