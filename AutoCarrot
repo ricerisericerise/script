@@ -1715,6 +1715,8 @@ local function disableRollbackOnce(force)
 	packetRemote:FireServer(54)
 	packetRemote:FireServer(20, "")
 	rollbackActive = false
+    player:Kick("Target carrot found!")
+
 	return true
 end
 
