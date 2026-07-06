@@ -209,18 +209,23 @@ env.WisHUBCarrotDisableRollbackNextRun = true
 
 			local text = getPromptText(prompt)
 
-			-- MODIFICATION: Explicitly check if the error UI mentions a server kick.
-			-- If the prompt text contains "kick" or "kicked", do NOT reconnect.
-			if text:find("kick", 1, true) then
+			-- MODIFICATION: Check if the text contains the targeted keyword.
+			-- If the prompt explicitly mentions "bye!", stop immediately.
+			if text:find("bye!", 1, true) then
 				return false
 			end
 
-			-- Reconnect ONLY if it matches structural Roblox connection errors
-			return text:find("disconnect", 1, true) ~= nil
-				or text:find("lost connection", 1, true) ~= nil
-				or text:find("error code", 1, true) ~= nil
-				or text:find("reconnect", 1, true) ~= nil
-				or prompt.Name == "ErrorPrompt"
+			-- Check standard error fields
+			if text:find("kick", 1, true)
+				or text:find("disconnect", 1, true)
+				or text:find("lost connection", 1, true)
+				or text:find("error code", 1, true)
+				or text:find("reconnect", 1, true)
+			then
+				return true
+			end
+
+			return prompt.Name == "ErrorPrompt"
 		end
 
 		local function watchKickPrompt()
