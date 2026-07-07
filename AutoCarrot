@@ -2455,7 +2455,7 @@ local function startRollbackRejoinMonitor()
 				if hasWantedCarrot then
 					disableRollbackOnce()
                     sendDiscordWebhook(matchedKg)
-                    task.wait(1)
+                    task.wait(0.05)
 					kickForWantedCarrot(matchedKg)
 					return
 				end
