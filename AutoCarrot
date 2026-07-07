@@ -2414,7 +2414,7 @@ local function sendDiscordWebhook(foundKg)
 		return
 	end
 	local data = {
-		["content"] = string.format("🎉 **Harvester Alert!** 🎉\n**_"..player.Name.."_** berhasil menemukan target Carrot seberat **%.2f Kg**! Rollback telah dimatikan dan player di-kick.\n<@&1521437395558334595>", foundKg or 0),
+		["content"] = string.format("🎉 **Harvester Alert!** 🎉\n**_"..player.Name.."_** berhasil menemukan target Carrot seberat **%.2f Kg**! Rollback telah dimatikan dan player di-kick.", foundKg or 0),
 		["username"] = "Carrot Notifier"
 	}
 	local req = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
