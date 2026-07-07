@@ -2408,6 +2408,30 @@ local function startLoadingStuckRelogWatchdog()
 	end)
 end
 
+local function sendDiscordWebhook(foundKg)
+	local url = cfgString("Webhook", "")
+	if url == "" then
+		return
+	end
+	local data = {
+		["content"] = string.format("🎉 **Harvester Alert!** 🎉\n"..player.Name.." Berhasil menemukan target Carrot seberat **%.2f Kg**! Rollback telah dimatikan dan player di-kick.", foundKg or 0),
+		["username"] = "Carrot Notifier"
+	}
+	local req = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
+	if req then
+		pcall(function()
+			req({
+				Url = url,
+				Method = "POST",
+				Headers = {
+					["Content-Type"] = "application/json"
+				},
+				Body = game:GetService("HttpService"):JSONEncode(data)
+			})
+		end)
+	end
+end
+
 local function startRollbackRejoinMonitor()
 	if not cfgBool("AutoRejoin", false) then
 		return
@@ -2430,6 +2454,8 @@ local function startRollbackRejoinMonitor()
 				local hasWantedCarrot, matchedKg = gardenHasWantedCarrot()
 				if hasWantedCarrot then
 					disableRollbackOnce()
+                    sendDiscordWebhook(matchedKg)
+                    task.wait(1)
 					kickForWantedCarrot(matchedKg)
 					return
 				end
