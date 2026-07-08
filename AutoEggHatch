@@ -11,6 +11,7 @@ local ALLOWED_NAMES = {
     ["VinzennMc1"] = true,
     ["astr0boiiiii"] = true,
     ["JUMATUL1"] = true,
+    ["Pshtjaya01"] = true,
 }
 
 local processedWhitelist = {}
